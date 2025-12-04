@@ -30,6 +30,7 @@ from ls2d.ecmwf import download_era5
 from ls2d.ecmwf import download_cams
 
 from ls2d.ecmwf import Read_era5
+from ls2d.ecmwf import Read_ICON
 from ls2d.ecmwf import Read_cams
 
 from ls2d.src import grid

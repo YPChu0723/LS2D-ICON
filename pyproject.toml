@@ -32,7 +32,8 @@ dependencies = [
     "requests",
     "dill",
     "pyyaml",
-    "dask"
+    "dask",
+    "setuptools",
 ]
 requires-python = ">=3.6"
 
