@@ -101,7 +101,7 @@ class Read_era5:
         case = self.settings['case_name']
 
         an_sfc_files   = [era_tools.era5_file_path(
-            d.year, d.month, d.day, path, case, 'surface_an',  False) for d in an_dates]
+            d.year, d.month, d.day, path, case, 'surface_an_instant',  False) for d in an_dates]
         an_model_files = [era_tools.era5_file_path(
             d.year, d.month, d.day, path, case, 'model_an',    False) for d in an_dates]
         an_pres_files  = [era_tools.era5_file_path(
@@ -127,7 +127,7 @@ class Read_era5:
         # This is only a fallback option, in case someone has unpatched NetCDF files.
         # The patching is now automatically done after downloading the files.
         for f in an_sfc_files + an_model_files + an_pres_files:
-            ds = xr.open_dataset(f)
+            ds = xr.open_dataset(f, engine='netcdf4')
             if 'valid_time' in ds.dims:
                 patch_netcdf(f)
 
@@ -236,7 +236,7 @@ class Read_era5:
         self.qr = get_variable(self.fma, 'crwc', s3d)  # Specific rain water content (kg kg-1)
         self.qs = get_variable(self.fma, 'cswc', s3d)  # Specific snow content (kg kg-1)
         self.o3 = get_variable(self.fma, 'o3',   s3d)  # Ozone (kg kg-1)
-
+        # self.qv = self.q - (self.qc + self.qi + self.qs + self.qr)  # Water vapour specific humidity (kg kg-1)
         # Surface variables:
         self.sst =  get_variable(self.fsa, 'sst',  s2d)  # Sea surface temperature (K)
         self.Ts  =  get_variable(self.fsa, 'skt',  s2d)  # Skin temperature (K)
@@ -272,7 +272,7 @@ class Read_era5:
         self.p_p = get_variable(self.fpa, 'level', s1d) * 100         # Pressure levels (Pa)
 
         # Convert ozone from mass mixing ratio to volume mixing ratio
-        self.o3 = 28.9644 / 47.9982 * self.o3 * 1e6
+        # self.o3 = 28.9644 / 47.9982 * self.o3 * 1e6
 
 
     def calc_derived_data(self):
@@ -282,7 +282,8 @@ class Read_era5:
         """
 
         self.ql  = self.qc + self.qi + self.qr + self.qs  # Total liquid/solid specific humidity (kg kg-1)
-        self.qt = self.q + self.ql + self.qi             # Total specific humidity including ice (kg kg-1)
+        self.qt = self.q + self.ql
+        self.qv = self.q  # Water vapour specific humidity (kg kg-1)
         self.Tv  = ifs_tools.calc_virtual_temp(
                 self.T, self.q, self.qc, self.qi, self.qr, self.qs)  # Virtual temp on full levels (K)
 
@@ -333,7 +334,7 @@ class Read_era5:
         self.theta_soil[:,3,:,:] = self.theta_soil4[:,:,:]
 
 
-    def calculate_forcings(self, n_av=0, method='4th'):
+    def calculate_forcings(self, n_av_lon=0, n_av_lat=0, method='4th'):
         """
         Calculate the advective tendencies, geostrophic wind, et cetera.
         """
@@ -353,16 +354,16 @@ class Read_era5:
                         self.settings['central_lat'], self.settings['central_lon'], distance/1000.))
 
         # Print averaging area.
-        dlon = (1+2*n_av) * float(self.lons[1] - self.lons[0])
-        dlat = (1+2*n_av) * float(self.lats[1] - self.lats[0])
+        dlon = (1+2*n_av_lon) * float(self.lons[1] - self.lons[0])
+        dlat = (1+2*n_av_lat) * float(self.lats[1] - self.lats[0])
         self.area = f'{dlon:.2f}°×{dlat:.2f}°'
         logger.debug(f'Averaging ERA5 over a {self.area} spatial area.')
 
         # Start and end indices of averaging domain:
-        istart = self.i - n_av
-        iend   = self.i + n_av + 1
-        jstart = self.j - n_av
-        jend   = self.j + n_av + 1
+        istart = int(self.i - n_av_lon)
+        iend   = int(self.i + n_av_lon + 1)
+        jstart = int(self.j - n_av_lat)
+        jend   = int(self.j + n_av_lat + 1)
 
         # Numpy slicing tuples for averaging domain
         center4d = np.s_[:,:,jstart:jend,istart:iend]
@@ -370,7 +371,7 @@ class Read_era5:
 
         # Variables averaged from (time, height, lon, lat) to (time, height):
         var_4d_mean = [
-                'z', 'zh', 'p', 'ph', 'T', 'thl', 'qt', 'qc', 'qi',
+                'z', 'zh', 'p', 'ph', 'T', 'thl', 'qt', 'qc', 'qi', 'qv', 'ql',
                 'u', 'v', 'U', 'wls', 'rho', 'o3',
                 'T_soil', 'theta_soil']
         for var in var_4d_mean:
@@ -406,12 +407,24 @@ class Read_era5:
         # Half level values temperature for radiation
         self.Th_mean = np.zeros_like(self.zh_mean)
         self.Th_mean[:,1:-1] = 0.5 * (self.T_mean[:,1:] + self.T_mean[:,:-1])
-
         dTdz = (self.Th_mean[:,1] - self.T_mean[:,0]) / (self.zh_mean[:,1] - self.z_mean[:,0])
         self.Th_mean[:,0] = self.T_mean[:,0] - dTdz * self.z_mean[:,0]
-
         dTdz = (self.T_mean[:,-1] - self.Th_mean[:,-2]) / (self.z_mean[:,-1] - self.zh_mean[:,-2])
         self.Th_mean[:,-1] = self.T_mean[:,-1] + dTdz * (self.zh_mean[:,-1] - self.z_mean[:,-1])
+
+        self.qlh_mean = np.zeros_like(self.zh_mean)
+        self.qlh_mean[:,1:-1] = 0.5 * (self.ql_mean[:,1:] + self.ql_mean[:,:-1])
+        dTdz = (self.qlh_mean[:,1] - self.ql_mean[:,0]) / (self.zh_mean[:,1] - self.z_mean[:,0])
+        self.qlh_mean[:,0] = self.ql_mean[:,0] - dTdz * self.z_mean[:,0]
+        dTdz = (self.ql_mean[:,-1] - self.qlh_mean[:,-2]) / (self.z_mean[:,-1] - self.zh_mean[:,-2])
+        self.qlh_mean[:,-1] = self.ql_mean[:,-1] + dTdz * (self.zh_mean[:,-1] - self.z_mean[:,-1])
+
+        self.qvh_mean = np.zeros_like(self.zh_mean)
+        self.qvh_mean[:,1:-1] = 0.5 * (self.qv_mean[:,1:] + self.qv_mean[:,:-1])
+        dTdz = (self.qvh_mean[:,1] - self.qv_mean[:,0]) / (self.zh_mean[:,1] - self.z_mean[:,0])
+        self.qvh_mean[:,0] = self.qv_mean[:,0] - dTdz * self.z_mean[:,0]
+        dTdz = (self.qv_mean[:,-1] - self.qvh_mean[:,-2]) / (self.z_mean[:,-1] - self.zh_mean[:,-2])
+        self.qvh_mean[:,-1] = self.qv_mean[:,-1] + dTdz * (self.zh_mean[:,-1] - self.z_mean[:,-1])
 
         # Estimate horizontal grid spacing (assumed constant in averaging domain)\
         dx = spatial.dlon(self.lons[self.i-1], self.lons[self.i+1], self.lats[self.j]) / 2.
@@ -644,6 +657,8 @@ class Read_era5:
         variables = {
                 'thl': ('liquid water potential temperature', 'K'),
                 'qt': ('total specific humidity', 'kg kg-1'),
+                'qv': ('vapor specific humidity', 'kg kg-1'),
+                'ql': ('liquid specific humidity', 'kg kg-1'),
                 'u': ('zonal wind component', 'm s-1'),
                 'v': ('meridional wind component', 'm s-1'),
                 'wls': ('vertical wind component', 'm s-1'),
@@ -654,7 +669,7 @@ class Read_era5:
                 'dtv_advec': ('advective tendency meridional wind', 'm s-2'),
                 'ug': ('geostrophic wind component zonal wind', 'm s-1'),
                 'vg': ('geostrophic wind component meridional wind', 'm s-1'),
-                'o3': ('ozone volume mixing ratio', 'ppmv'),
+                'o3': ('ozone mixing ratio', 'kg kg-1'),
                 }
 
         #
@@ -691,9 +706,15 @@ class Read_era5:
         add_ds_var(ds, 't_lay', self.T_mean, ('time', 'lay'), 'full level temperature radiation', 'K')
         add_ds_var(ds, 't_lev', self.Th_mean, ('time', 'lev'), 'half level temperature radiation', 'K')
 
+        add_ds_var(ds, 'ql_lay', self.ql_mean, ('time', 'lay'), 'full level ql radiation', 'kg kg-1')
+        add_ds_var(ds, 'ql_lev', self.qlh_mean, ('time', 'lev'), 'half level ql radiation', 'kg kg-1')
+
+        add_ds_var(ds, 'qv_lay', self.qv_mean, ('time', 'lay'), 'full level qv radiation', 'kg kg-1')
+        add_ds_var(ds, 'qv_lev', self.qvh_mean, ('time', 'lev'), 'half level qv radiation', 'kg kg-1')
+
         h2o_lay = self.qt_mean / (ep - ep * self.qt_mean)
         add_ds_var(ds, 'h2o_lay', h2o_lay, ('time', 'lay'), 'moisture volume mixing ratio', '')
-        add_ds_var(ds, 'o3_lay', self.o3_mean, ('time', 'lay'), 'ozone volume mixing ratio radiation', 'ppmv')
+        add_ds_var(ds, 'o3_lay', self.o3_mean, ('time', 'lay'), 'ozone mixing ratio radiation', 'kg kg-1')
 
         # Soil variables
         add_ds_var(ds, 't_soil', self.T_soil_mean, ('time', 'zs'), 'soil temperature', 'K')

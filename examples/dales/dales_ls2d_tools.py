@@ -220,6 +220,34 @@ def write_forcings(file_name, timedep_sfc, timedep_atm, docstring=''):
 
     f.close()
 
+def write_backrad(file_name, backrad):
+    """
+    Write the backrad.inp.xxx input profiles for DALES
+    """
+
+    print(' - Saving {}'.format(file_name))
+
+    nt = backrad['time'].size
+    nlay = backrad['p_lay'].size
+    # print(f'nlay:{nlay}')
+    f = open(file_name, 'w')
+
+    # Write header (description file)
+    # temperature nlev
+    f.write('{0:d} {1:d}\n'.format(int(backrad['ts']), int(nlay)))
+
+    p = _get_or_default(backrad, 'p_lay', [nt, nlay], 0)
+    T = _get_or_default(backrad, 't_lay', [nt, nlay], 0)
+    qv = _get_or_default(backrad, 'qv_lay', [nt, nlay], 0)
+    o3 = _get_or_default(backrad, 'o3_lay', [nt, nlay], 0)
+    ql = _get_or_default(backrad, 'ql_lay', [nt, nlay], 0)
+    # shape check
+    # Write data
+    for k in range(nlay):
+        f.write('{0:>10.5f}  {1:>10.3f}  {2:>12.5E}  {3:>12.5E}  {4:>4E}\n'.format(p[k], T[k], qv[k], o3[k], ql[k])) 
+
+    f.close()
+
 
 def create_backrad(p, T, q, expnr=1):
     """

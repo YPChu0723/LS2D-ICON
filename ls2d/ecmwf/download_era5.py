@@ -30,8 +30,10 @@ import numpy as np
 
 # LS2D modules
 import ls2d.ecmwf.era_tools as era_tools
+from ls2d.src.messages import *
 from ls2d.ecmwf.patch_cds_ads import patch_netcdf
-from ls2d.src.logger import logger
+
+from ls2d.ecmwf.era_tools import unzip_era5_file
 
 # Yikes, but necessary (?) if you want to use
 # MARS downloads without the Python CDS api installed?
@@ -104,7 +106,7 @@ def _download_era5_file(settings):
                 ftype : level/forecast/analysis switch (in: [model_an, model_fc, pressure_an, surface_an])
     """
 
-    logger.info('Downloading: {} - {}'.format(settings['date'], settings['ftype']))
+    header('Downloading: {} - {}'.format(settings['date'], settings['ftype']))
 
     # Keep track of CDS downloads which are finished:
     finished = False
@@ -124,10 +126,23 @@ def _download_era5_file(settings):
         sys.stderr = open(err_file, 'w')
 
     # Bounds of domain
-    lat_n = settings['central_lat']+settings['area_size']
-    lat_s = settings['central_lat']-settings['area_size']
-    lon_w = settings['central_lon']-settings['area_size']
-    lon_e = settings['central_lon']+settings['area_size']
+    if all(k in settings for k in ('lat_n', 'lat_s', 'lon_w', 'lon_e')):
+        message('Using pre-defined bounding box from settings.')
+        lat_n = settings['lat_n']
+        lat_s = settings['lat_s']
+        lon_w = settings['lon_w']
+        lon_e = settings['lon_e']
+    # Fallback to original central lat/lon + size logic
+    elif all(k in settings for k in ('central_lat', 'central_lon', 'area_size')):
+        message('Calculating bounding box from central point and area size.')
+        lat_n = settings['central_lat']+settings['area_size']
+        lat_s = settings['central_lat']-settings['area_size']
+        lon_w = settings['central_lon']-settings['area_size']
+        lon_e = settings['central_lon']+settings['area_size']
+    else:
+        error('Domain boundaries are not correctly defined in settings. '
+              'Please provide EITHER (lat_n, lat_s, lon_w, lon_e) '
+              'OR (central_lat, central_lon, area_size).', exit=True)
 
     # Monitor the required download time
     start = datetime.datetime.now()
@@ -140,7 +155,7 @@ def _download_era5_file(settings):
         pickle_file = '{}.pickle'.format(nc_file[:-3])
 
         if os.path.isfile(pickle_file):
-            logger.debug('Found previous CDS request!')
+            message('Found previous CDS request!')
 
             with open(pickle_file, 'rb') as f:
                 cds_request = pickle.load(f)
@@ -148,33 +163,38 @@ def _download_era5_file(settings):
                 try:
                     cds_request.update()
                 except requests.exceptions.HTTPError:
-                    logger.warning('CDS request is no longer available online!')
-                    logger.critical('To continue, delete the previous request: {}'.format(pickle_file))
+                    error('CDS request is no longer available online!', exit=False)
+                    error('To continue, delete the previous request: {}'.format(pickle_file))
 
                 state = cds_request.reply['state']
 
                 if state == 'completed':
-                    logger.debug('Request finished, downloading NetCDF file')
+                    message('Request finished, downloading NetCDF file')
 
                     cds_request.download(nc_file)
+                    f.close()
                     os.remove(pickle_file)
-
-                    # Patch NetCDF file, to make the (+/-) identical to the old CDS
-                    # files, and files retrieved from MARS.
-                    patch_netcdf(nc_file)
+                    if settings['ftype'] == 'surface_an':
+                        era_tools.unzip_era5_file(nc_file, nc_dir)
+                        patch_netcdf(os.path.join(nc_dir, 'surface_an_accum.nc'))
+                        patch_netcdf(os.path.join(nc_dir, 'surface_an_instant.nc'))
+                    else:
+                        # Patch NetCDF file, to make the (+/-) identical to the old CDS
+                        # files, and files retrieved from MARS.
+                        patch_netcdf(nc_file)
 
                     finished = True
 
                 elif state in ('queued', 'accepted', 'running'):
-                    logger.debug('Request not finished, current status = \"{}\"'.format(state))
+                    message('Request not finished, current status = \"{}\"'.format(state))
 
                 else:
-                    logger.error('Request failed, status = \"{}\"'.format(state))
-                    logger.error('Error message = {}'.format(cds_request.reply['error'].get('message')))
-                    logger.critical('Error reason = {}'.format(cds_request.reply['error'].get('reason')))
+                    error('Request failed, status = \"{}\"'.format(state), exit=False)
+                    message('Error message = {}'.format(cds_request.reply['error'].get('message')))
+                    message('Error reason = {}'.format(cds_request.reply['error'].get('reason')))
 
         else:
-            logger.debug('No previous CDS request, submitting new one')
+            message('No previous CDS request, submitting new one')
 
             # Create instance of CDS API
             server = cdsapi.Client(wait_until_complete=False, delete=False)
@@ -210,14 +230,20 @@ def _download_era5_file(settings):
                 elif settings['ftype'] == 'surface_an':
                     request.update({
                         'variable': [
-                            'instantaneous_moisture_flux', 'high_vegetation_cover', 'leaf_area_index_high_vegetation',
-                            'leaf_area_index_low_vegetation', 'low_vegetation_cover', 'sea_surface_temperature',
-                            'skin_temperature', 'soil_temperature_level_1', 'soil_temperature_level_2',
+                            'instantaneous_moisture_flux', 
+                            'high_vegetation_cover', 'leaf_area_index_high_vegetation',
+                            'leaf_area_index_low_vegetation', 'low_vegetation_cover', 
+                            'sea_surface_temperature',
+                            'skin_temperature', 
+                            'soil_temperature_level_1', 'soil_temperature_level_2',
                             'soil_temperature_level_3', 'soil_temperature_level_4', 'soil_type',
-                            'surface_pressure', 'instantaneous_surface_sensible_heat_flux', 'type_of_high_vegetation',
-                            'type_of_low_vegetation', 'volumetric_soil_water_layer_1', 'volumetric_soil_water_layer_2',
+                            'surface_pressure', 'instantaneous_surface_sensible_heat_flux', 
+                            'type_of_high_vegetation', 'type_of_low_vegetation', 
+                            'volumetric_soil_water_layer_1', 'volumetric_soil_water_layer_2',
                             'volumetric_soil_water_layer_3', 'volumetric_soil_water_layer_4',
-                            'forecast_logarithm_of_surface_roughness_for_heat', 'forecast_surface_roughness']})
+                            'forecast_logarithm_of_surface_roughness_for_heat', 'forecast_surface_roughness',
+                            'surface_net_thermal_radiation', 'surface_net_solar_radiation', 
+                            'surface_solar_radiation_downwards', 'surface_thermal_radiation_downwards']})
 
                     cds_request = server.retrieve('reanalysis-era5-single-levels', request)
 
@@ -335,16 +361,16 @@ def download_era5(settings, exit_when_waiting=True):
             Case name used in file name of NetCDF files
     """
 
-    logger.info('Downloading ERA5 for period: {} to {}'.format(settings['start_date'], settings['end_date']))
+    header('Downloading ERA5 for period: {} to {}'.format(settings['start_date'], settings['end_date']))
 
     # Check if output directory exists, and ends with '/'
     if not os.path.isdir(settings['era5_path']):
-        logger.critical('Output directory \"{}\" does not exist!'.format(settings['era5_path']))
+        error('Output directory \"{}\" does not exist!'.format(settings['era5_path']))
     if settings['era5_path'][-1] != '/':
         settings['era5_path'] += '/'
 
     if cdsapi is None:
-        logger.critical('CDS API is not installed. See: https://cds.climate.copernicus.eu/api-how-to')
+        error('CDS API is not installed. See: https://cds.climate.copernicus.eu/api-how-to')
 
     # Round date/time to full hours
     start = era_tools.lower_to_hour(settings['start_date'])
@@ -374,11 +400,11 @@ def download_era5(settings, exit_when_waiting=True):
                         date.year, date.month, date.day, settings['era5_path'], settings['case_name'], ftype)
 
                 if not os.path.exists(era_dir):
-                    logger.debug('Creating output directory {}'.format(era_dir))
+                    message('Creating output directory {}'.format(era_dir))
                     os.makedirs(era_dir)
 
                 if os.path.isfile(era_file):
-                    logger.debug('Found {} - {} local'.format(date, ftype))
+                    message('Found {} - {} local'.format(date, ftype))
                 else:
                     settings_tmp = download_settings.copy()
                     settings_tmp.update({'date': date, 'ftype':ftype})
@@ -391,13 +417,21 @@ def download_era5(settings, exit_when_waiting=True):
 
     if not finished:
         if settings['data_source'] == 'CDS':
-            logger.warning('One or more requests not finished.')
-            logger.warning('You can monitor the progress at https://cds.climate.copernicus.eu/requests?tab=all')
-
+            print(' -----------------------------------------------------------')
+            print(' | One or more requests are not finished.                  |')
+            print(' | For CDS request, you can monitor the progress at:       |')
+            print(' | https://cds.climate.copernicus.eu/cdsapp#!/yourrequests |')
+            if exit_when_waiting:
+                print(' | This script will stop now, you can restart it           |')
+                print(' | at any time to retry, or download the results.          |')
+                print(' -----------------------------------------------------------')
+                sys.exit(0)
+            print(' -----------------------------------------------------------')
         else:
-            logger.info('MARS requests are submitted through SLURM.')
-            logger.warning('You can monitor the progress using the squeue command.')
+            print(' -------------------------------------------------')
+            print(' | MARS requests are submitted.                  |')
+            print(' | This script will stop now, you can restart it |')
+            print(' | at any time to retry.                         |')
+            print(' -------------------------------------------------')
 
-        if exit_when_waiting:
-            logger.warning('(LS)2D will stop now. Restart the script later to download the results.')
-            sys.exit(0)
+    return finished

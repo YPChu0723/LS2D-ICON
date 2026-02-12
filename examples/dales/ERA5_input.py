@@ -21,13 +21,15 @@
 # Python modules
 from datetime import datetime
 from collections import OrderedDict as odict
-import sys
-import os
+import subprocess
+import shutil
+import sys,os
+import xarray as xr
+
 
 # Third party modules
 import numpy as np
-import xarray as xr
-import matplotlib.pyplot as plt
+
 # LS2D & custom modules
 sys.path.append('/Users/yunpeichu/LS2D-ICON/ls2d')
 import ls2d
@@ -35,57 +37,66 @@ import dales_ls2d_tools as dlt
 
 #
 # Download ERA5 and generate LES initialisation and forcings
-#
+# #
+# arctic_bounds = {
+#     'lat_n': 71.5,    
+#     'lat_s': 71.0,    
+#     'lon_w': -156.865,  
+#     'lon_e': -156.365   
+# }
+# central_lon = (arctic_bounds['lon_w'] + arctic_bounds['lon_e']) / 2
+# central_lat = (arctic_bounds['lat_n'] + arctic_bounds['lat_s']) / 2
 settings = {
-    'central_lat' : 47.11925,
-    'central_lon' : 7.84675,
-    'area_size'   : 1,
-    'case_name'   : 'ICON_reglatlon',
-    'ICON_path'   : '/Users/yunpeichu/CLOUDLAB_MIP/Data/CLOUDLAB_MIP_input/',
-    #'era5_path'   : '/Users/bart/meteo/data/ERA5/LS2D',
-    'start_date'  : datetime(year=2023, month=1, day=26, hour=0, minute=0),
-    'end_date'    : datetime(year=2023, month=1, day=26, hour=6, minute=0),
+#      **arctic_bounds,
+    'central_lon' : -156.609,
+    'central_lat' : 71.323,
+    'area_size'   : 0.25,
+    'case_name'   : 'NSA',
+    'era5_path'   : '/Users/yunpeichu/work_dales/',
+    'era5_expver' : 1,
+    'start_date'  : datetime(year=2025, month=1, day=24, hour=12),
+    'end_date'    : datetime(year=2025, month=1, day=24, hour=18),
     'write_log'   : True,
     'data_source' : 'CDS'
     }
 
-# Define vertical grid LES:
-# grid = ls2d.grid.Grid_three_stage(kmax=270, dz0=10, z_stretch_start=1200, stretch_factor=0.0213, dz_max=185)
-# grid = ls2d.grid.Grid_three_stage(kmax=270, dz0=10, z_stretch_start=1000, stretch_factor=0.034, dz_max=190)
-grid = ls2d.grid.Grid_three_stage(kmax=176, dz0=10, z_stretch_start=500, stretch_factor=0.020, dz_max=80)
-# grid = ls2d.grid.Grid_linear_stretched(kmax=220, dz0=10, alpha=0.0125)
-grid.plot()
-plt.savefig('/Users/yunpeichu/LS2D-ICON/grid.png')
+# Download required ERA5 files:
+ls2d.download_era5(settings)
 
 # Read ERA5 data, and calculate derived properties (thl, etc.):
-icon = ls2d.Read_ICON(settings)
+era = ls2d.Read_era5(settings)
 
 # Calculate initial conditions and large-scale forcings for LES:
-icon.calculate_forcings(n_av_lat=80, n_av_lon=165, method='2nd')
+era.calculate_forcings(n_av_lat=0.5, n_av_lon=0.5, method='2nd')
 
-expnr = 9
+# Define vertical grid LES:
+grid = ls2d.grid.Grid_linear_stretched(kmax=120, dz0=10, alpha=0.02078)
+# grid.plot()
+
+expnr = 4
 # --- MODIFICATION START ---
-out_dir = f'/Users/yunpeichu/work_dales/mpc_seed/run_00{expnr}'
+out_dir = f'/Users/yunpeichu/work_dales/NSA/run_00{expnr}'
 # Create directory if it doesn't exist
 os.makedirs(out_dir, exist_ok=True)
 # --- MODIFICATION END ---
 
 # Interpolate ERA5 variables and forcings onto LES grid.
 # In addition, `get_les_input` returns additional variables needed to init LES.
-les_input = icon.get_les_input(grid.z)
-era5_backrad_input = xr.open_dataset('/Users/yunpeichu/work_dales/mpc_seed/era5/run_001/ERA5.backrad.inp.nc')
+les_input = era.get_les_input(grid.z, method='linear')
+
 # Save les_input (xarray.Dataset) to a compressed NetCDF file
 # --- Modified path ---
 nc_fname = os.path.join(out_dir, f"{settings.get('case_name', 'les_input')}_les_input.nc")
 
 encoding = {v: {'zlib': True, 'complevel': 4} for v in les_input.data_vars}
 les_input.to_netcdf(nc_fname, encoding=encoding)
+era5_backrad_input = xr.open_dataset('/Users/yunpeichu/work_dales/mpc_seed/era5/run_001/ERA5.backrad.inp.nc')
 print(f"Saved LES input to {nc_fname}")
 
-# print(les_input)
-#
+print(les_input)
+
 # DALES specific initialisation.
-#
+
 # Settings:
 
 tau_nudge = 10800    # Nudging time scale atmosphere
@@ -141,8 +152,8 @@ output_ls = odict([
         ('ug',     les_input.ug.values),
         ('vg',     les_input.vg.values),
         ('wls',    les_input.wls.values),
-        ('dqtdx',    les_input.dqtdx_advec.values),
-        ('dqtdy',    les_input.dqtdy_advec.values),
+        # ('dqtdx',    les_input.dqtdx_advec.values),
+        # ('dqtdy',    les_input.dqtdy_advec.values),
         ('dqtdt',  les_input.dtqt_advec.values),
         ('dthldt', les_input.dtthl_advec.values),
         ('dudt',   les_input.dtu_advec.values),
@@ -193,19 +204,22 @@ dlt.write_profiles(
 #
 # Write radiation background profiles to `backrad.inp.expnr`.
 #
-
 output_backrad = odict([
         ('time', les_input.time_sec.values),
         ('z_lay', les_input.z_lay[0,::-1].values),
         ('ts', les_input.ts[0].values),
-        ('p_lay', era5_backrad_input.p_lay[::-1].values),
-        ('t_lay', era5_backrad_input.t_lay[::-1].values),
-        ('qv_lay', era5_backrad_input.qv_lay[::-1].values),
-        ('o3_lay', era5_backrad_input.qv_lay[::-1].values),
-        # ('o3_lay', les_input_with_o3.o3_lay[::-1].values),
-        ('ql_lay', era5_backrad_input.ql_lay[::-1].values),])
+        ('p_lay', les_input.p_lay[0,::-1].values),
+        ('t_lay', les_input.t_lay[0,::-1].values),
+        ('qv_lay', les_input.qv_lay[0,::-1].values),
+        ('o3_lay', les_input.o3_lay[0,::-1].values),
+        ('ql_lay', les_input.ql_lay[0,::-1].values),])
 
-# --- Modified path ---
 dlt.write_backrad(
         os.path.join(out_dir, 'backrad.inp.{0:03d}'.format(expnr)), 
         output_backrad)
+
+# # --- Modified path ---
+# dlt.create_backrad(
+#         les_input['p_lay'].mean(axis=0),
+#         les_input['t_lay'].mean(axis=0),
+#         les_input['h2o_lay'].mean(axis=0))

@@ -37,19 +37,21 @@ class _Grid:
 
     def plot(self, logx=False, logy=False):
 
-        fig=pl.figure()
-        ax=pl.subplot(121)
-        pl.title(r'$z_\mathrm{{size}}$ = {0:.1f} m'.format(self.zsize), loc='left')
-        pl.plot(self.dz, self.z, 'k-x')
-        pl.xlabel(r'$\Delta z$ (m)')
-        pl.ylabel(r'$z$ (m)')
-        pl.grid()
+        fig, ax = pl.subplots()
+        ax.set_title("zsize={:.1f} m".format(self.zsize))
+        ax.plot(np.arange(self.kmax), self.z/1000, color='k', linestyle='-', label=r'$z$')
+        ax.set_xlabel(r'Vertical grid point (-)')
+        ax.set_ylabel(r'height $z$ (km)')
+        ax.tick_params(axis='x', labelcolor='k')
+        ax.set_ylim(0,12)
+        ax.set_xlim(0,self.kmax)
+        ax.grid()
 
-        ax=pl.subplot(122)
-        pl.plot(np.arange(self.kmax)+1, self.z, 'k-x')
-        pl.xlabel(r'Level (-)')
-        pl.ylabel(r'$z$ (m)')
-        pl.grid()
+        ax2 = ax.twinx()
+        ax2.set_ylabel(r'Grid spacing $\Delta z$ (m)', color='green')
+        ax2.plot(np.arange(self.kmax), self.dz, color='green', linestyle='--', label=r'$\Delta z$')
+        ax2.tick_params(axis='x', labelcolor='green')
+        ax2.set_ylim(0,200)
 
         if logx:
             for ax in fig.axes:
@@ -152,6 +154,39 @@ class Grid_stretched_manual(_Grid):
         self.zh[-1] = self.zsize
 
 
+class Grid_three_stage(_Grid):
+    def __init__(self, kmax, dz0, z_stretch_start, stretch_factor, dz_max):
+        
+        _Grid.__init__(self, kmax, dz0)
+
+        k_t = int(np.round(z_stretch_start / dz0))
+        self.dz[:k_t] = dz0
+
+        # 2. Stretch until we hit dz_max OR run out of grid points
+        stretch_index = k_t 
+        print(k_t)
+        
+        while stretch_index < kmax and ((dz0 * (1 + stretch_factor)**(stretch_index -(k_t + 1))) < dz_max):
+            self.dz[stretch_index] = dz0 * (1 + stretch_factor)**(stretch_index - (k_t + 1))
+            stretch_index += 1
+
+        print(stretch_index, kmax)
+        if stretch_index < kmax:
+            self.dz[stretch_index:] = dz_max
+
+
+        self.z = np.zeros(kmax)
+        self.z[0] = dz0 * 0.5
+        for k in range(1, kmax):
+            self.z[k] = self.z[k-1] + self.dz[k]
+        
+        self.zsize = self.z[kmax-1] + 0.5*self.dz[kmax-1]
+
+        self.zh[1:-1] = 0.5 * (self.z[1:] + self.z[:-1])
+        self.zh[0] = 0
+        self.zh[-1] = self.zsize
+
+
 if __name__ == '__main__':
     """
     For debug/testing.
@@ -159,7 +194,7 @@ if __name__ == '__main__':
 
     grid1 = Grid_equidist(kmax=10, dz0=20)
 
-    grid2 = Grid_linear_stretched(kmax=10, dz0=10, alpha=0.1)
+    grid2 = Grid_linear_stretched(kmax=286, dz0=10, alpha=0.0213)
 
     heights = [0,50,10000]
     alpha = [1.02, 1.2]
@@ -167,26 +202,30 @@ if __name__ == '__main__':
 
     grid4 = Grid_stretched(kmax=10, dz0=10, nloc1=5, nbuf1=5, dz1=25)
 
+    grid5 = Grid_three_stage(kmax=176, dz0=10, z_stretch_start=500, stretch_factor=0.020, dz_max=80)
     # Plot!
     pl.figure()
+    grid2.plot()
+    pl.savefig('/Users/yunpeichu/LS2D-ICON/grid_linear_stretched.png')
+    grid5.plot()
+    pl.savefig('/Users/yunpeichu/LS2D-ICON/grid_three_stage.png')
+    # def plot_grid(grid, color, x, label):
+    #     pl.plot(np.ones_like(grid.z)*x, grid.z, '-o', color=color, ms=5, label=f'{label}')
+    #     pl.plot(np.ones_like(grid.zh)*x, grid.zh, '-x', color=color, ms=5)
 
-    def plot_grid(grid, color, x, label):
-        pl.plot(np.ones_like(grid.z)*x, grid.z, '-o', color=color, ms=5, label=f'{label}')
-        pl.plot(np.ones_like(grid.zh)*x, grid.zh, '-x', color=color, ms=5)
+    # pl.subplot(121)
+    # plot_grid(grid1, 'tab:red', 0, 'Grid_equidist')
+    # plot_grid(grid2, 'tab:blue', 1, 'Grid_linear_stretched')
+    # plot_grid(grid3, 'tab:green', 2, 'Grid_stretched_manual')
+    # plot_grid(grid4, 'tab:purple', 3, 'Grid_stretched')
+    # pl.xlabel(r'-')
+    # pl.ylabel(r'$z$ (m)')
+    # pl.legend()
 
-    pl.subplot(121)
-    plot_grid(grid1, 'tab:red', 0, 'Grid_equidist')
-    plot_grid(grid2, 'tab:blue', 1, 'Grid_linear_stretched')
-    plot_grid(grid3, 'tab:green', 2, 'Grid_stretched_manual')
-    plot_grid(grid4, 'tab:purple', 3, 'Grid_stretched')
-    pl.xlabel(r'-')
-    pl.ylabel(r'$z$ (m)')
-    pl.legend()
-
-    pl.subplot(122)
-    pl.plot(grid1.dz, grid1.z, '-o', color='tab:red')
-    pl.plot(grid2.dz, grid2.z, '-o', color='tab:blue')
-    pl.plot(grid3.dz, grid3.z, '-o', color='tab:green')
-    pl.plot(grid4.dz, grid4.z, '-o', color='tab:purple')
-    pl.xlabel(r'$\Delta$ z (m)')
-    pl.ylabel(r'$z$ (m)')
+    # pl.subplot(122)
+    # pl.plot(grid1.dz, grid1.z, '-o', color='tab:red')
+    # pl.plot(grid2.dz, grid2.z, '-o', color='tab:blue')
+    # pl.plot(grid3.dz, grid3.z, '-o', color='tab:green')
+    # pl.plot(grid4.dz, grid4.z, '-o', color='tab:purple')
+    # pl.xlabel(r'$\Delta$ z (m)')
+    # pl.ylabel(r'$z$ (m)')

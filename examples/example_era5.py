@@ -32,15 +32,15 @@ sys.path.append('/home/bart/meteo/models/LS2D')
 import ls2d
 
 settings = {
-    'central_lat' : 51.97,
-    'central_lon' : 4.93,
+    'central_lat' : 47.11925,
+    'central_lon' : 7.84675,
     'area_size'   : 1,
-    'case_name'   : 'acabauw',
-    'era5_path'   : '/home/scratch1/bart/LS2D_ERA5/',
+    'case_name'   : 'mpc_seed',
+    'era5_path'   : '/Users/yunpeichu/work_dales/mpc_seed/era5',
     'era5_expver' : 1,   # 1=normal ERA5, 5=ERA5 near-realtime
-    'start_date'  : datetime(year=2006, month=8, day=16, hour=6),
-    'end_date'    : datetime(year=2006, month=8, day=16, hour=18),
-    'write_log'   : False,
+    'start_date'  : datetime(year=2023, month=1, day=26, hour=0),
+    'end_date'    : datetime(year=2023, month=1, day=26, hour=6),
+    'write_log'   : True,
     'data_source' : 'CDS'
     }
 

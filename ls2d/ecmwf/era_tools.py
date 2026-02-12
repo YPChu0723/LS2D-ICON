@@ -20,6 +20,8 @@
 
 # Python modules
 import datetime
+import zipfile
+import os
 
 # Third party modules
 
@@ -32,7 +34,7 @@ def era5_file_path(year, month, day, path, case, ftype, return_dir=True):
     Return saving path of files in format `path/yyyy/mm/dd/type.nc`
     """
 
-    era_dir = "{0}/{1}/{2:04d}/{3:02d}/{4:02d}".format(path, case, year, month, day)
+    era_dir = "{0}{1}/{2:04d}/{3:02d}/{4:02d}".format(path, case, year, month, day)
     era_file = "{0}/{1}.nc".format(era_dir, ftype)
 
     if return_dir:
@@ -88,3 +90,22 @@ def lower_to_hour(time):
     if time.minute != 0 or time.second != 0:
         warning('Changed date/time from {} to {}'.format(time, time_out))
     return time_out
+
+
+def unzip_era5_file(zip_path, extract_dir):
+    try:
+        # Open the zip file in read mode
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            # Extract all the contents into the directory
+            print(f"Extracting {zip_path} to {extract_dir}...")
+            zip_ref.extractall(extract_dir)
+            print("Extraction complete.")
+            
+    except FileNotFoundError:
+        print(f"Error: The file {zip_path} was not found.")
+    except zipfile.BadZipFile:
+        print(f"Error: {zip_path} is not a valid or supported ZIP file.")
+
+    os.rename(os.path.join(extract_dir, 'data_stream-oper_stepType-accum.nc'), os.path.join(extract_dir, 'surface_an_accum.nc'))
+    os.rename(os.path.join(extract_dir, 'data_stream-oper_stepType-instant.nc'), os.path.join(extract_dir, 'surface_an_instant.nc'))
+    

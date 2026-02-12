@@ -99,12 +99,12 @@ class Read_ICON:
         path = self.settings['ICON_path']
         case = self.settings['case_name']
 
-        an_model_files   = [ICON_tools.file_path(
-            d.year, d.month, d.day, d.hour, d.minute, path, case, 'rmp_CLOUDLAB_MIP_input_130_',  False) for d in an_dates]
+        # an_model_files   = [ICON_tools.file_path(d.year, d.month, d.day, d.hour, d.minute, path, case + '/sliced', 'rmp_CLOUDLAB_MIP_input_130_',  False) for d in an_dates]
+        an_model_files   = [ICON_tools.file_path(d.year, d.month, d.day, d.hour, d.minute, path, case, 'rmp_CLOUDLAB_MIP_input_130_',  False) for d in an_dates]
         # an_model_files = [ICON_tools.era5_file_path(
         #     d.year, d.month, d.day, path, case, 'model_an',    False) for d in an_dates]
-        an_pres_files  = [ICON_tools.file_path(
-            d.year, d.month, d.day, d.hour, d.minute, path, case + '/pressure_levels_output', 'pl_rmp_CLOUDLAB_MIP_input_130_',  False) for d in an_dates]
+        # an_pres_files  = [ICON_tools.file_path(d.year, d.month, d.day, d.hour, d.minute, path, case + '/sliced' + '/pressure_levels_output', 'pl_rmp_CLOUDLAB_MIP_input_130_',  False) for d in an_dates]
+        an_pres_files  = [ICON_tools.file_path(d.year, d.month, d.day, d.hour, d.minute, path, case + '/pressure_levels_output', 'pl_rmp_CLOUDLAB_MIP_input_130_',  False) for d in an_dates]
 
         # Check if all files exist, and exit if not..
         def check_files(files):
@@ -129,7 +129,8 @@ class Read_ICON:
         # Open NetCDF files: MFDataset automatically merges the files / time dimensions
         # self.fma = nc4.MFDataset(an_model_files, aggdim='time')
         self.fma = xr.open_mfdataset(an_model_files, combine='by_coords')
-        self.fpa = xr.open_mfdataset(an_pres_files, combine='by_coords').isel(plev_3=slice(0,35))  # Reverse pressure levels
+        self.fpa = xr.open_mfdataset(an_pres_files, combine='by_coords')
+        # self.fpa = xr.open_mfdataset(an_pres_files, combine='by_coords')  
 
 
 
@@ -224,10 +225,13 @@ class Read_ICON:
         self.qi = get_variable(self.fma, 'qi',   s3d) 
         self.qr = get_variable(self.fma, 'qr',   s3d)  
         self.qs = get_variable(self.fma, 'qs',   s3d)  
-        self.q  = get_variable(self.fma, 'qv',   s3d)  
+        self.qv  = get_variable(self.fma, 'qv',   s3d)  
         
         self.p  = get_variable(self.fma, 'pres', s3d)  
-        self.zh = get_variable(self.fma, 'z_ifc',s3d) 
+        self.zifc = get_variable(self.fma, 'z_ifc',s3d)
+        self.topoc =  get_variable(self.fma, 'topography_c',s2d)
+        self.zh = self.zifc - self.topoc[:, None, :, :]
+        # self.zh = get_variable(self.fma, 'z_ifc',s3d)
 
         # Surface variables:
         self.qvs  = get_variable(self.fma, 'qv_s',   s2d) 
@@ -266,9 +270,9 @@ class Read_ICON:
         """
 
         self.ql  = self.qc + self.qi + self.qr + self.qs  # Total liquid/solid specific humidity (kg kg-1)
-        self.qt  = self.q + self.ql                       # Total specific humidity (kg kg-1)
+        self.qt  = self.qv + self.ql                       # Total specific humidity (kg kg-1)
         self.Tv  = utils.calc_virtual_temp(
-                self.T, self.q, self.qc, self.qi, self.qr, self.qs)  # Virtual temp on full levels (K)
+                self.T, self.qv, self.qc, self.qi, self.qr, self.qs)  # Virtual temp on full levels (K)
 
         # Calculate half level pressure and heights
         self.ph  = np.zeros((self.ntime, self.nhalf, self.nlat, self.nlon))  # Half level pressure (Pa)
@@ -351,7 +355,7 @@ class Read_ICON:
 
         # Variables averaged from (time, height, lon, lat) to (time, height):
         var_4d_mean = [
-                'z', 'zh', 'p', 'ph', 'T', 'thl', 'qt', 'qc', 'qi',
+                'z', 'zh', 'p', 'ph', 'T', 'thl', 'qt', 'qc', 'qi', 'ql', 'qv',
                 'u', 'v', 'U', 'wls', 'rho',
                 'T_soil', 'theta_soil']
         for var in var_4d_mean:
@@ -397,6 +401,24 @@ class Read_ICON:
         dTdz = (self.T_mean[:,-1] - self.Th_mean[:,-2]) / (self.z_mean[:,-1] - self.zh_mean[:,-2])
         self.Th_mean[:,-1] = self.T_mean[:,-1] + dTdz * (self.zh_mean[:,-1] - self.z_mean[:,-1])
 
+        self.qlh_mean = np.zeros_like(self.zh_mean)
+        self.qlh_mean[:,1:-1] = 0.5 * (self.ql_mean[:,1:] + self.ql_mean[:,:-1])
+
+        dTdz = (self.qlh_mean[:,1] - self.ql_mean[:,0]) / (self.zh_mean[:,1] - self.z_mean[:,0])
+        self.qlh_mean[:,0] = self.ql_mean[:,0] - dTdz * self.z_mean[:,0]
+
+        dTdz = (self.ql_mean[:,-1] - self.qlh_mean[:,-2]) / (self.z_mean[:,-1] - self.zh_mean[:,-2])
+        self.qlh_mean[:,-1] = self.ql_mean[:,-1] + dTdz * (self.zh_mean[:,-1] - self.z_mean[:,-1])
+
+        self.qvh_mean = np.zeros_like(self.zh_mean)
+        self.qvh_mean[:,1:-1] = 0.5 * (self.qv_mean[:,1:] + self.qv_mean[:,:-1])
+
+        dTdz = (self.qvh_mean[:,1] - self.qv_mean[:,0]) / (self.zh_mean[:,1] - self.z_mean[:,0])
+        self.qvh_mean[:,0] = self.qv_mean[:,0] - dTdz * self.z_mean[:,0]
+
+        dTdz = (self.qv_mean[:,-1] - self.qvh_mean[:,-2]) / (self.z_mean[:,-1] - self.zh_mean[:,-2])
+        self.qvh_mean[:,-1] = self.qv_mean[:,-1] + dTdz * (self.zh_mean[:,-1] - self.z_mean[:,-1])
+
         # Estimate horizontal grid spacing (assumed constant in averaging domain)\
         dx = spatial.dlon(self.lons[self.i-1], self.lons[self.i+1], self.lats[self.j]) / 2.
         dy = spatial.dlat(self.lats[self.j-1], self.lats[self.j+1]) / 2.
@@ -435,7 +457,8 @@ class Read_ICON:
             # Geostrophic wind:
             dzdx = np.gradient(self.z_p, axis=3) / dxdi[None, None, :, :]
             dzdy = np.gradient(self.z_p, axis=2) / dydj[None, None, :, :]
-
+            # print(np.mean(dzdx, axis=(2,3))[0,:])
+            # print(np.mean(dzdy, axis=(2,3))[0,:])
             self.ug_p = -utils.grav / self.fc * dzdy
             self.vg_p =  utils.grav / self.fc * dzdx
 
@@ -567,7 +590,17 @@ class Read_ICON:
                 # print('array[t,:]', array[t,:].shape)
                 out[t,:] = np.interp(z, self.z_mean[t,:], array[t,:])
             return out
-
+        
+        def extrapolate_z(array):
+            out = np.empty((self.ntime, self.z_mean.shape[1]))
+            for t in range(self.ntime):
+                mask = ~np.isnan(array[t,:])
+                z_valid = self.z_mean[t,:][mask]
+                array_valid = array[t,:][mask]
+                f = interpolate.interp1d(z_valid, array_valid, kind='nearest', fill_value='extrapolate')
+                out[t,:] = f(self.z_mean[t,:])
+            return out
+        
         def add_ds_var(ds, name, data, dims, long_name, units):
             if dims is not None:
                 ds[name] = (dims, data)
@@ -598,6 +631,8 @@ class Read_ICON:
         variables = {
                 'thl': ('liquid water potential temperature', 'K'),
                 'qt': ('total specific humidity', 'kg kg-1'),
+                'qv': ('vapor specific humidity', 'kg kg-1'),
+                'ql': ('liquid specific humidity', 'kg kg-1'),
                 'u': ('zonal wind component', 'm s-1'),
                 'v': ('meridional wind component', 'm s-1'),
                 'wls': ('vertical wind component', 'm s-1'),
@@ -619,8 +654,13 @@ class Read_ICON:
         for var in variables.keys():
             var_era5 = '{}_mean'.format(var)
             if hasattr(self, var_era5):
+                if var in ['ug', 'vg']:
+                    # Geostrophic wind may require extrapolation
+                    self_extra = extrapolate_z(getattr(self, var_era5))
+                    data = interp_z(self_extra, z)
+                else:
                 # print('Interpolating variable "{}"...'.format(var))
-                data  = interp_z(getattr(self, var_era5), z)
+                    data  = interp_z(getattr(self, var_era5), z)
                 attrs = variables[var]
                 add_ds_var(ds, var, data, ('time', 'z'), attrs[0], attrs[1])
             else:
@@ -641,6 +681,12 @@ class Read_ICON:
 
         add_ds_var(ds, 't_lay', self.T_mean, ('time', 'lay'), 'full level temperature radiation', 'K')
         add_ds_var(ds, 't_lev', self.Th_mean, ('time', 'lev'), 'half level temperature radiation', 'K')
+
+        add_ds_var(ds, 'qv_lay', self.qv_mean, ('time', 'lay'), 'full level qv radiation', 'kg kg-1')
+        add_ds_var(ds, 'qv_lev', self.qvh_mean, ('time', 'lev'), 'half level qv radiation', 'kg kg-1')
+
+        add_ds_var(ds, 'ql_lay', self.ql_mean, ('time', 'lay'), 'full level ql radiation', 'kg kg-1')
+        add_ds_var(ds, 'ql_lev', self.qlh_mean, ('time', 'lev'), 'half level ql radiation', 'kg kg-1')
 
         h2o_lay = self.qt_mean / (ep - ep * self.qt_mean)
         add_ds_var(ds, 'h2o_lay', h2o_lay, ('time', 'lay'), 'moisture volume mixing ratio', '')
@@ -680,7 +726,7 @@ class Read_ICON:
         ds.attrs['central_lon'] = self.settings['central_lon']
         ds.attrs['central_lat'] = self.settings['central_lat']
         ds.attrs['area'] = f'{self.area} spatial average'
-        ds.attrs['source'] = 'ERA5 + (LS)²D'
+        ds.attrs['source'] = 'ICON + (LS)²D'
         ds.attrs['description'] = 'Generated by (LS)²D: https://github.com/LS2D & https://pypi.org/project/ls2d)'
         ds.attrs['reference'] = 'van Stratum et al. (2023). The benefits and challenges of downscaling a global reanalysis with doubly-periodic large-eddy simulations. JAMES, https://doi.org/10.1029/2023MS003750'
 

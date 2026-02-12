@@ -34,11 +34,13 @@ dependencies = [
     "pyyaml",
     "dask",
     "setuptools",
+    "colorlog"
 ]
-requires-python = ">=3.6"
+requires-python = "==3.10.18"
 
 [project.optional-dependencies]
-cds = ["cdsapi"]
+cds = ["cdsapi==0.7.0",
+       "ecmwf-datastores-client==0.2.0"]
 
 [project.urls]
 Homepage = "https://github.com/LS2D/LS2D"
