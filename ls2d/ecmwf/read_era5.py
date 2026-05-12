@@ -240,6 +240,7 @@ class Read_era5:
         # Surface variables:
         self.sst = get_variable(self.fsa, 'sst', s2d)  # Sea surface temperature (K)
         self.Ts = get_variable(self.fsa, 'skt', s2d)  # Skin temperature (K)
+        self.siconc = get_variable(self.fsa, 'siconc', s2d)  # Sea ice cover fraction (-)
         self.H = -get_variable(self.fsa, 'ishf', s2d)  # Surface sensible heat flux (W m-2)
         self.wqs = -get_variable(self.fsa, 'ie', s2d)  # Surface kinematic moisture flux (g kg-1)
         self.z0m = get_variable(self.fsa, 'fsr', s2d)  # Surface roughness length (m)
@@ -385,6 +386,7 @@ class Read_era5:
             'ph',
             'T',
             'thl',
+            'q',
             'qt',
             'qc',
             'qi',
@@ -406,6 +408,7 @@ class Read_era5:
             'ps',
             'Ts',
             'sst',
+            'siconc',
             'wths',
             'wqs',
             'ps',
@@ -420,6 +423,13 @@ class Read_era5:
         for var in var_3d_mean:
             mean = getattr(self, var)[center3d].mean(axis=(1, 2))
             setattr(self, '{}_mean'.format(var), mean)
+
+        # siconc and sst are only defined over ocean; when the central grid point is over
+        # land, use nanmean over the full downloaded domain to get a representative value.
+        for _ocean_var in ('siconc', 'sst'):
+            _data = np.ma.filled(getattr(self, _ocean_var).astype(float), np.nan)
+            _mean = np.nanmean(_data, axis=(1, 2))
+            setattr(self, f'{_ocean_var}_mean', np.where(np.isnan(_mean), 0.0, _mean))
 
         # Variables selected as nearest-neighbour
         var_nn = ['soil_type', 'veg_type_low', 'veg_type_high']
@@ -475,6 +485,8 @@ class Read_era5:
             # Calculate advective tendencies:
             self.dtthl_advec_mean = advec(self.thl)
             self.dtqt_advec_mean = advec(self.qt)
+            self.dtqc_advec_mean = advec(self.qc)
+            self.dtqi_advec_mean = advec(self.qi)
             self.dtu_advec_mean = advec(self.u)
             self.dtv_advec_mean = advec(self.v)
 
@@ -553,6 +565,44 @@ class Read_era5:
                     self.qt[s(-1, 0)],
                     self.qt[s(+1, 0)],
                     self.qt[s(+2, 0)],
+                    dy,
+                )
+            ).mean(axis=(2, 3))
+
+            self.dtqc_advec_mean = (
+                -self.u[s(0, 0)]
+                * fd.grad4c(
+                    self.qc[s(0, -2)],
+                    self.qc[s(0, -1)],
+                    self.qc[s(0, +1)],
+                    self.qc[s(0, +2)],
+                    dx,
+                )
+                - self.v[s(0, 0)]
+                * fd.grad4c(
+                    self.qc[s(-2, 0)],
+                    self.qc[s(-1, 0)],
+                    self.qc[s(+1, 0)],
+                    self.qc[s(+2, 0)],
+                    dy,
+                )
+            ).mean(axis=(2, 3))
+
+            self.dtqi_advec_mean = (
+                -self.u[s(0, 0)]
+                * fd.grad4c(
+                    self.qi[s(0, -2)],
+                    self.qi[s(0, -1)],
+                    self.qi[s(0, +1)],
+                    self.qi[s(0, +2)],
+                    dx,
+                )
+                - self.v[s(0, 0)]
+                * fd.grad4c(
+                    self.qi[s(-2, 0)],
+                    self.qi[s(-1, 0)],
+                    self.qi[s(+1, 0)],
+                    self.qi[s(+2, 0)],
                     dy,
                 )
             ).mean(axis=(2, 3))
@@ -943,6 +993,7 @@ class Read_era5:
         add_ds_var(ds, 'ps', self.ps_mean, ('time'), 'surface pressure', 'Pa')
         add_ds_var(ds, 'sst', self.sst_mean, ('time'), 'sea surface temperature', 'K')
         add_ds_var(ds, 'ts', self.Ts_mean, ('time'), 'surface (skin) temperature', 'K')
+        add_ds_var(ds, 'siconc', self.siconc_mean, ('time'), 'sea ice area fraction', '-')
         add_ds_var(ds, 'wth', self.wths_mean, ('time'), 'surface sensible heat flux', 'K m s-1')
         add_ds_var(
             ds,

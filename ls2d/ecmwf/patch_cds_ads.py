@@ -59,8 +59,11 @@ def patch_netcdf(nc_file_path):
 
     # Drop `expver`; we need to save this file in classic NetCDF4 format, which
     # does not support variable length strings.
-    if 'expver' in ds.variables:
-        ds = ds.drop('expver')
+    # Drop `number` (ensemble member id); scalar coordinate that causes issues
+    # when saving to NETCDF4_CLASSIC format.
+    drop_vars = [v for v in ('expver', 'number') if v in ds.variables]
+    if drop_vars:
+        ds = ds.drop_vars(drop_vars)
 
     file_name = os.path.basename(nc_file_path)
 
