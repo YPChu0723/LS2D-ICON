@@ -25,7 +25,7 @@ import sys
 import time
 from datetime import datetime
 
-NSA_INPUT_SCRIPT = '/Users/yunpeichu/LS2D/examples/dales/nsa_input.py'
+NSA_INPUT_SCRIPT = '/Users/yunpeichu/LS2D/examples/dales/nsa_input_dales4.py'
 LS2D_OUT_ROOT    = '/Users/yunpeichu/LS2D/results/NSA_2/run_era5'
 DALES_INPUT_ROOT = '/Users/yunpeichu/work_dales/NSA_2/input'
 

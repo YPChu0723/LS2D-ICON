@@ -53,11 +53,11 @@ _args = _parse_args()
 
 _start_date = (
     datetime.fromisoformat(_args.start_date)
-    if _args.start_date else datetime(year=2022, month=11, day=20, hour=6)
+    if _args.start_date else datetime(year=2022, month=11, day=25, hour=6)
 )
 _end_date = (
     datetime.fromisoformat(_args.end_date)
-    if _args.end_date else datetime(year=2022, month=11, day=20, hour=9)
+    if _args.end_date else datetime(year=2022, month=11, day=25, hour=9)
 )
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -123,7 +123,6 @@ print(les_input)
 # DALES specific initialisation.
 
 # Settings:
-
 tau_nudge = 10800    # Nudging time scale atmosphere
 init_tke = 0.1       # Initial SGS-TKE
 
@@ -156,8 +155,9 @@ print(f' - Sonde time index {_tidx}: {_t[_tidx]/3600:.2f} UTC (target {_t_target
 _station_alt = float(_ds['alt'][:])                            # m AMSL
 _alt = np.ma.filled(_ds['height'][:], np.nan) * 1e3 - _station_alt  # m AGL
 
-# Profile at selected time (potential_temp is θ ≈ θ_l, sh is q_t in g/g)
-_t = np.ma.filled(_ds['temp'][_tidx, :], np.nan)   # K
+# Profile at selected time
+_temp = np.ma.filled(_ds['temp'][_tidx, :], np.nan)   # C
+_temp_K = _temp + 273.15                                # K
 _qt  = np.ma.filled(_ds['sh'][_tidx, :],             np.nan)   # g/g == kg/kg (dimensionless ratio)
 _u   = np.ma.filled(_ds['u_wind'][_tidx, :],         np.nan)   # m/s
 _v   = np.ma.filled(_ds['v_wind'][_tidx, :],         np.nan)   # m/s
@@ -165,13 +165,17 @@ _p   = np.ma.filled(_ds['bar_pres'][_tidx, :],       np.nan) * 1000.0   # kPa ->
 _rh  = np.ma.filled(_ds['rh'][_tidx, :],             np.nan)   # % -> fraction
 _ds.close()
 
-# Remove invalid levels (height already ascending)
-_ok = np.isfinite(_alt) & np.isfinite(_t) & np.isfinite(_qt) & \
-      np.isfinite(_u)   & np.isfinite(_v) & np.isfinite(_p) & np.isfinite(_rh)
-_alt, _t, _qt, _u, _v, _p, _rh = _alt[_ok], _t[_ok], _qt[_ok], _u[_ok], _v[_ok], _p[_ok], _rh[_ok]
+_ql = get_ql(_qt, _rh, _temp, _p)
+_thl = get_theta_l(_temp_K, _p, _ql) 
 
-sonde_t = interp1d(_alt, _t, bounds_error=False,
-                     fill_value=(_t[0], _t[-1]))(grid.z)
+# Remove invalid levels (height already ascending)
+_ok = np.isfinite(_alt) & np.isfinite(_temp) & np.isfinite(_qt) & \
+      np.isfinite(_u)   & np.isfinite(_v) & np.isfinite(_p) & np.isfinite(_rh) & \
+      np.isfinite(_thl)
+_alt, _temp, _qt, _u, _v, _p, _rh , _thl = _alt[_ok], _temp[_ok], _qt[_ok], _u[_ok], _v[_ok], _p[_ok], _rh[_ok], _thl[_ok]
+
+sonde_t = interp1d(_alt, _temp, bounds_error=False,
+                     fill_value=(_temp[0], _temp[-1]))(grid.z)
 sonde_qt  = interp1d(_alt, _qt,  bounds_error=False,
                      fill_value=(_qt[0],  _qt[-1]))(grid.z)
 sonde_u   = interp1d(_alt, _u,   bounds_error=False,
@@ -294,7 +298,8 @@ def _interp_to_era(alt_agl, src):
     return interp1d(alt_agl, src, bounds_error=False,
                     fill_value=(src[0], src[-1]))(_era_z)
 
-era_init_t = _interp_to_era(_alt, _t)
+era_init_t = _interp_to_era(_alt, _temp)
+era_init_thl = _interp_to_era(_alt, _thl)
 era_init_qt  = _interp_to_era(_alt, _qt)
 era_init_u   = _interp_to_era(_alt, _u)
 era_init_v   = _interp_to_era(_alt, _v)
@@ -327,6 +332,31 @@ albedo_0  = float(albedo_ts[0])
 _ds_fal.close()
 print(f' - Albedo (fal): min={albedo_ts.min():.4f}, max={albedo_ts.max():.4f}, t=0={albedo_0:.4f}')
 # =====================================================================
+# Read ARM ground IR skin temperature at start-time from nsagndirtC1.b1.
+# Use the 1-min observation nearest to the run start hour (default 06:00 UTC).
+# Falls back to ERA5 Ts_mean if the file is absent or QC fails.
+# =====================================================================
+_gndirt_dir  = '/Users/yunpeichu/Arctic_data/ARM-NSA/nsagndirtC1.b1'
+_gndirt_file = os.path.join(_gndirt_dir, f'nsagndirtC1.b1.{_date_str}.000000.nc')
+arm_t_skin = None
+if os.path.exists(_gndirt_file):
+    _ds_gnd = _nc4.Dataset(_gndirt_file)
+    _gnd_time = np.ma.filled(_ds_gnd['time'][:], np.nan)  # seconds since midnight
+    _gnd_target = (settings['start_date'].hour * 3600
+                   + settings['start_date'].minute * 60
+                   + settings['start_date'].second)
+    _gnd_tidx = int(np.argmin(np.abs(_gnd_time - _gnd_target)))
+    _sfc_ir = float(np.ma.filled(_ds_gnd['sfc_ir_temp'][_gnd_tidx], np.nan))
+    _qc_ir  = int(np.ma.filled(_ds_gnd['qc_sfc_ir_temp'][_gnd_tidx], -1))
+    _ds_gnd.close()
+    if np.isfinite(_sfc_ir) and _sfc_ir > 0 and _qc_ir == 0:
+        arm_t_skin = _sfc_ir
+        print(f' - ARM skin temperature at t={_gnd_time[_gnd_tidx]/3600:.2f} UTC: {arm_t_skin:.2f} K')
+    else:
+        print(f' - ARM skin temperature QC failed or missing (qc={_qc_ir}, val={_sfc_ir:.2f}); using ERA5')
+else:
+    print(f' - ARM gndirt file not found for {_date_str}; using ERA5 skin temperature')
+# =====================================================================
 # Arctic CCN concentration: 50 /cm³ = 5e7 /m³.
 # This sets both the initial droplet number (nc0 in namoption) and the
 # CCN reservoir (n_ccn in scm_in). Keep them consistent.
@@ -347,10 +377,11 @@ dlt.create_scm_in(
     freeze_2step=True,
     albedo=albedo_ts,
     n_ccn=N_CCN,
-    init_t=era_init_t,
+    init_thl=era_init_thl,
     init_qt=era_init_qt,
     init_u=era_init_u,
     init_v=era_init_v,
+    t_skin=arm_t_skin,
 )
 
 #

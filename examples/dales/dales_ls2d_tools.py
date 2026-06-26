@@ -312,7 +312,8 @@ def create_backrad(p, T, q, o3=None, lwc=None, expnr=1, output_dir='.', fmt='tex
 
 def create_scm_in(era, file_path, albedo=0.1, sea_ice_frac=None, t_skin_seaice=None, n_ccn=1e8,
                   time_slice=None, freeze_2step=False,
-                  init_t=None, init_qt=None, init_u=None, init_v=None):
+                  init_thl=None, init_qt=None, init_u=None, init_v=None,
+                  t_skin=None):
     """
     Generate a scm_in.nc file for DALES testbed mode (ltestbed=.true.) from ERA5 data.
 
@@ -424,10 +425,10 @@ def create_scm_in(era, file_path, albedo=0.1, sea_ice_frac=None, t_skin_seaice=N
     u_local = np.zeros((nt, nf), dtype='f8')
     v_local = np.zeros((nt, nf), dtype='f8')
 
-    if any(x is not None for x in (init_t, init_qt, init_u, init_v)):
-        if init_t is not None:
+    if any(x is not None for x in (init_thl, init_qt, init_u, init_v)):
+        if init_thl is not None:
             # T = t * exner  (assumes ql=0, valid for sonde data)
-            T_local[:, :] = np.asarray(init_t, dtype='f8')
+            T_local[:, :] = np.asarray(init_thl, dtype='f8')
         if init_qt is not None:
             # For sonde (no liquid water): qt == qv, written as 'q' in scm_in
             q_local[:, :] = np.asarray(init_qt, dtype='f8')
@@ -495,7 +496,11 @@ def create_scm_in(era, file_path, albedo=0.1, sea_ice_frac=None, t_skin_seaice=N
     _v('lat_grid',     ('time',), np.full(nt, lat_val),     'latitude of closest IFS gridpoint',  'degrees North')
     _v('lon_grid',     ('time',), np.full(nt, lon_val),     'longitude of closest IFS gridpoint', 'degrees East')
     _v('ps',           ('time',), _ts(era.ps_mean),         'surface pressure',                   'Pa')
-    _v('t_skin',       ('time',), _ts(era.Ts_mean),         'skin temperature',                   'K')
+    if t_skin is not None:
+        _t_skin_arr = np.full(nt, float(t_skin), dtype='f4')
+    else:
+        _t_skin_arr = np.asarray(_ts(era.Ts_mean), dtype='f4')
+    _v('t_skin',       ('time',), _t_skin_arr,              'skin temperature',                   'K')
     _v('sfc_sens_flx', ('time',), _ts(sfc_sens_flx),        'surface sensible heat flux',          'W/m2')
     _v('sfc_lat_flx',  ('time',), _ts(sfc_lat_flx),         'surface latent heat flux',            'W/m2')
     _v('mom_rough',    ('time',), _ts(era.z0m_mean),        'roughness length for momentum',       'm')
