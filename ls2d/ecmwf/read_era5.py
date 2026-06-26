@@ -360,10 +360,10 @@ class Read_era5:
         logger.debug(f'Averaging ERA5 over a {self.area} spatial area.')
 
         # Start and end indices of averaging domain:
-        istart = int(self.i - n_av_lon)
-        iend   = int(self.i + n_av_lon + 1)
-        jstart = int(self.j - n_av_lat)
-        jend   = int(self.j + n_av_lat + 1)
+        istart = max(0, int(self.i - n_av_lon))
+        iend   = min(self.nlon, int(self.i + n_av_lon + 1))
+        jstart = max(0, int(self.j - n_av_lat))
+        jend   = min(self.nlat, int(self.j + n_av_lat + 1))
 
         # Numpy slicing tuples for averaging domain
         center4d = np.s_[:,:,jstart:jend,istart:iend]
@@ -426,9 +426,11 @@ class Read_era5:
         dTdz = (self.qv_mean[:,-1] - self.qvh_mean[:,-2]) / (self.z_mean[:,-1] - self.zh_mean[:,-2])
         self.qvh_mean[:,-1] = self.qv_mean[:,-1] + dTdz * (self.zh_mean[:,-1] - self.z_mean[:,-1])
 
-        # Estimate horizontal grid spacing (assumed constant in averaging domain)\
-        dx = spatial.dlon(self.lons[self.i-1], self.lons[self.i+1], self.lats[self.j]) / 2.
-        dy = spatial.dlat(self.lats[self.j-1], self.lats[self.j+1]) / 2.
+        # Estimate horizontal grid spacing (assumed constant in averaging domain)
+        i0, i1 = max(0, self.i-1), min(self.nlon-1, self.i+1)
+        j0, j1 = max(0, self.j-1), min(self.nlat-1, self.j+1)
+        dx = spatial.dlon(self.lons[i0], self.lons[i1], self.lats[self.j]) / (i1 - i0) if i1 > i0 else spatial.dlon(0.0, 0.25, self.lats[self.j])
+        dy = spatial.dlat(self.lats[j0], self.lats[j1]) / (j1 - j0) if j1 > j0 else spatial.dlat(0.0, 0.25)
 
         if (method == '2nd'):
 

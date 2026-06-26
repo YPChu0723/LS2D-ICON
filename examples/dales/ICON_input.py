@@ -21,191 +21,185 @@
 # Python modules
 from datetime import datetime
 from collections import OrderedDict as odict
-import sys
-import os
+import sys, os
+import xarray as xr
 
 # Third party modules
 import numpy as np
-import xarray as xr
-import matplotlib.pyplot as plt
+
 # LS2D & custom modules
 sys.path.append('/Users/yunpeichu/LS2D-ICON/ls2d')
 import ls2d
 import dales_ls2d_tools as dlt
 
-#
-# Download ERA5 and generate LES initialisation and forcings
-#
+# ============================================================
+# 1. Settings
+# ============================================================
 settings = {
-    'central_lat' : 47.11925,
-    'central_lon' : 7.84675,
+    'central_lat' : 47.0705,
+    'central_lon' : 7.8735,
     'area_size'   : 1,
-    'case_name'   : 'ICON_reglatlon',
-    'ICON_path'   : '/Users/yunpeichu/CLOUDLAB_MIP/Data/CLOUDLAB_MIP_input/',
-    #'era5_path'   : '/Users/bart/meteo/data/ERA5/LS2D',
+    'case_name'   : 'CLOUDLAB_MIP_input_130_',
+    'ICON_path'   : '/Users/yunpeichu/CLOUDLAB_MIP/MIP_data/CLOUDLAB_MIP_input',
+    'ICON_format' : 'reglatlon',
+    'era5_path'      : '/Users/yunpeichu/LS2D-ICON/data/era5',
+    'era5_case_name' : 'cloudlab',
     'start_date'  : datetime(year=2023, month=1, day=26, hour=0, minute=0),
     'end_date'    : datetime(year=2023, month=1, day=26, hour=6, minute=0),
     'write_log'   : True,
-    'data_source' : 'CDS'
-    }
+    'data_source' : 'CDS',
+}
 
-# Define vertical grid LES:
-# grid = ls2d.grid.Grid_three_stage(kmax=270, dz0=10, z_stretch_start=1200, stretch_factor=0.0213, dz_max=185)
-# grid = ls2d.grid.Grid_three_stage(kmax=270, dz0=10, z_stretch_start=1000, stretch_factor=0.034, dz_max=190)
-grid = ls2d.grid.Grid_three_stage(kmax=176, dz0=10, z_stretch_start=500, stretch_factor=0.020, dz_max=80)
-# grid = ls2d.grid.Grid_linear_stretched(kmax=220, dz0=10, alpha=0.0125)
-grid.plot()
-plt.savefig('/Users/yunpeichu/LS2D-ICON/grid.png')
-
-# Read ERA5 data, and calculate derived properties (thl, etc.):
-icon = ls2d.Read_ICON(settings)
-
-# Calculate initial conditions and large-scale forcings for LES:
-icon.calculate_forcings(n_av_lat=80, n_av_lon=165, method='2nd')
-
-expnr = 9
-# --- MODIFICATION START ---
-out_dir = f'/Users/yunpeichu/work_dales/mpc_seed/run_00{expnr}'
-# Create directory if it doesn't exist
+expnr = 19
+out_dir = f'/Users/yunpeichu/LS2D-ICON/results/mpcseed/run_site_based_0{expnr}'
 os.makedirs(out_dir, exist_ok=True)
-# --- MODIFICATION END ---
 
-# Interpolate ERA5 variables and forcings onto LES grid.
-# In addition, `get_les_input` returns additional variables needed to init LES.
-les_input = icon.get_les_input(grid.z)
-era5_backrad_input = xr.open_dataset('/Users/yunpeichu/work_dales/mpc_seed/era5/run_001/ERA5.backrad.inp.nc')
-# Save les_input (xarray.Dataset) to a compressed NetCDF file
-# --- Modified path ---
-nc_fname = os.path.join(out_dir, f"{settings.get('case_name', 'les_input')}_les_input.nc")
-
-encoding = {v: {'zlib': True, 'complevel': 4} for v in les_input.data_vars}
-les_input.to_netcdf(nc_fname, encoding=encoding)
-print(f"Saved LES input to {nc_fname}")
-
-# print(les_input)
-#
-# DALES specific initialisation.
-#
-# Settings:
-
-tau_nudge = 10800    # Nudging time scale atmosphere
-init_tke = 0.1       # Initial SGS-TKE
+tau_nudge = 10800    # Nudging time scale (s)
+init_tke  = 1e-05    # Initial SGS-TKE (m2 s-2)
 
 docstring = '(LS)2D case cloudlab: {} to {}'.format(
         settings['start_date'].isoformat(), settings['end_date'].isoformat())
 
+# ============================================================
+# 2. LES vertical grid
+# ============================================================
+# grid = ls2d.grid.Grid_stretched_capped(kmax=296, dz_start=5, k_T=210, s=0.02, k_M=280, dz_end=20)
+grid = ls2d.grid.Grid_stretched_capped(kmax=156, dz_start=10, k_T=100, s=0.02, k_M=140, dz_end=25)
+
+# ============================================================
+# 3. ICON: load data and compute mean profiles on LES grid
+#    → prof.inp, scalar.inp, nudge.inp, backrad.inp
+# ============================================================
+icon = ls2d.Read_ICON(settings)
+icon.get_mean_profiles(grid=grid, n_av_lat=0, n_av_lon=0)
+
 #
-# Write initial profiles to `prof.inp.expnr`.
+# prof.inp — initial thermodynamic and wind profiles
 #
 output = odict([
         ('z (m)',        grid.z),
-        ('thl (K)',      les_input.thl[0,:].values),
-        ('qt (kg kg-1)', les_input.qt[0,:].values),
-        ('u (m s-1)',    les_input.u[0,:].values),
-        ('v (m s-1)',    les_input.v[0,:].values),
-        ('tke (m2 s-2)', np.ones(grid.kmax)*init_tke)])
+        ('thl (K)',      icon.thl_mean[0, :]),
+        ('qt (kg kg-1)', icon.qt_mean[0, :]),
+        ('u (m s-1)',    icon.u_mean[0, :]),
+        ('v (m s-1)',    icon.v_mean[0, :]),
+        ('tke (m2 s-2)', np.ones(grid.kmax) * init_tke)])
 
-# --- Modified path ---
 dlt.write_profiles(
-        os.path.join(out_dir, 'prof.inp.{0:03d}'.format(expnr)), 
+        os.path.join(out_dir, 'prof.inp.{0:03d}'.format(expnr)),
         output, grid.kmax, docstring)
 
 #
-# Write initial scalar profiles to `scalar.inp.expnr`.
+# scalar.inp — initial scalar profiles (cloud droplet number concentration)
 #
-zero = np.zeros(grid.kmax)
+output = odict([
+        ('z (m)',    grid.z),
+        ('Nc (m-3)', np.zeros(grid.kmax))])
+
+dlt.write_profiles(
+        os.path.join(out_dir, 'scalar.inp.{0:03d}'.format(expnr)),
+        output, grid.kmax, docstring)
+
+#
+# nudge.inp — time-varying nudging profiles (state variables only)
+#
 output = odict([
         ('z (m)',        grid.z),
-        ('qr (kg kg-1)', zero),
-        ('nr (kg kg-1)', zero)])
+        ('factor (-)',   np.ones_like(icon.u_mean)),
+        ('u (m s-1)',    icon.u_mean),
+        ('v (m s-1)',    icon.v_mean),
+        ('w (m s-1)',    icon.w_mean),
+        ('thl (K)',      icon.thl_mean),
+        ('qt (kg kg-1)', icon.qt_mean)])
 
-# --- Modified path ---
-dlt.write_profiles(
-        os.path.join(out_dir, 'scalar.inp.{0:03d}'.format(expnr)), 
-        output, grid.kmax, docstring)
+dlt.write_time_profiles(
+        os.path.join(out_dir, 'nudge.inp.{0:03d}'.format(expnr)),
+        icon.time_sec, output, grid.kmax, docstring)
+
+# Save ICON state profiles to NetCDF
+icon_les = icon.get_les_input(grid.z)
+nc_fname = os.path.join(out_dir, f"{settings['case_name']}icon_les.nc")
+encoding = {v: {'zlib': True, 'complevel': 4} for v in icon_les.data_vars}
+icon_les.to_netcdf(nc_fname, encoding=encoding)
+print(f"Saved ICON LES state profiles to {nc_fname}")
+
+# ============================================================
+# 4. ERA5: large-scale forcings → ls_flux.inp, lscale.inp
+# ============================================================
+era5_settings = {
+    'central_lat' : settings['central_lat'],
+    'central_lon' : settings['central_lon'],
+    'start_date'  : settings['start_date'],
+    'end_date'    : settings['end_date'],
+    'era5_path'   : settings['era5_path'],
+    'case_name'   : settings['era5_case_name'],
+    'data_source' : settings.get('data_source', 'CDS'),
+    'write_log'   : settings.get('write_log', True),
+}
+era5 = ls2d.Read_era5(era5_settings)
+era5.calculate_forcings(n_av_lat=0, n_av_lon=0.5, method='2nd')
 
 #
-# Write large-scale forcings to `ls_flux.inp.expnr`.
+# backrad.inp — radiation background profile (ERA5 full model levels)
+#
+_p_era5_full  = era5.p_mean[0, :]
+_T_era5_full  = era5.T_mean[0, :]
+_qv_era5_full = era5.qv_mean[0, :]
+assert _p_era5_full.size == era5.nfull, 'backrad must use ERA5 full levels'
+_keep = np.concatenate(([True], np.diff(_p_era5_full) < 0))
+if not _keep.all():
+    print(' - backrad: dropping {} non-monotonic pressure level(s) at indices {}'
+          .format((~_keep).sum(), np.where(~_keep)[0].tolist()))
+dlt.create_backrad(
+        _p_era5_full[_keep],
+        _T_era5_full[_keep],
+        _qv_era5_full[_keep],
+        expnr=expnr, output_dir=out_dir, fmt='nc')
+
+era5_les = era5.get_les_input(grid.z, zh=grid.zh)
+
+#
+# ls_flux.inp — time-varying surface fluxes and large-scale forcings
 #
 output_sfc = odict([
-        ('time',   les_input.time_sec.values),
-        ('p_s',    les_input.ps.values),
-        ('wthl_s', les_input.wth.values),      
-        ('wqt_s',  les_input.wq.values),      
-        ('T_s',    np.zeros_like(les_input.time_sec)),      # Not sure if this works..
-        ('qt_s',   np.zeros_like(les_input.time_sec))])
+        ('time',   icon_les.time_sec.values),
+        ('p_s',    icon_les.ps.values),
+        ('wthl_s', icon_les.wth.values),
+        ('wqt_s',  icon_les.wq.values),
+        ('thls',    icon_les.thls.values),
+        ('qt_s',   icon_les.qvs.values)])
 
 output_ls = odict([
-        ('time',   les_input.time_sec.values),
+        ('time',   era5_les.time_sec.values),
         ('z',      grid.z),
-        ('ug',     les_input.ug.values),
-        ('vg',     les_input.vg.values),
-        ('wls',    les_input.wls.values),
-        ('dqtdx',    les_input.dqtdx_advec.values),
-        ('dqtdy',    les_input.dqtdy_advec.values),
-        ('dqtdt',  les_input.dtqt_advec.values),
-        ('dthldt', les_input.dtthl_advec.values),
-        ('dudt',   les_input.dtu_advec.values),
-        ('dvdt',   les_input.dtv_advec.values)])
+        ('ug',     era5_les.ug.values),
+        ('vg',     era5_les.vg.values),
+        ('wls',    era5_les.wls.values),
+        ('dqtdt',  era5_les.dtqt_advec.values),
+        ('dthldt', era5_les.dtthl_advec.values),
+        ('dudt',   era5_les.dtu_advec.values),
+        ('dvdt',   era5_les.dtv_advec.values)])
 
-# --- Modified path ---
 dlt.write_forcings(
-        os.path.join(out_dir, 'ls_flux.inp.{0:03d}'.format(expnr)), 
+        os.path.join(out_dir, 'ls_flux.inp.{0:03d}'.format(expnr)),
         output_sfc, output_ls, docstring)
 
 #
-# Write nudging profiles to `nudge.inp.expnr`.
+# lscale.inp — time-invariant large-scale profile (required by DALES)
 #
+zero = np.zeros(grid.kmax)
 output = odict([
-        ('z (m)',        grid.z),
-        ('factor (-)',   np.ones_like(les_input.u.values)),
-        ('u (m s-1)',    les_input.u.values),
-        ('v (m s-1)',    les_input.v.values),
-        ('w (m s-1)',    np.zeros_like(les_input.u.values)),
-        ('thl (K)',      les_input.thl.values),
-        ('qt (kg kg-1)', les_input.qt.values)])
+        ('height',    grid.z),
+        ('ug',        era5_les.ug[0, :].values),
+        ('vg',        era5_les.vg[0, :].values),
+        ('wfls',      era5_les.wls[0, :].values),
+        ('dqtdxls',   zero),
+        ('dqtdyls',   zero),
+        ('dqtdtls',   zero),
+        ('dthldt',    zero)])
 
-# --- Modified path ---
-dlt.write_time_profiles(
-        os.path.join(out_dir, 'nudge.inp.{0:03d}'.format(expnr)), 
-        les_input.time_sec.values, output, grid.kmax, docstring)
-
-#
-# Also create non-time dependent file (lscale.inp), required by DALES (why?)
-#
-zero = np.zeros_like(grid.z)
-
-output = odict([
-        ('height', grid.z),
-        ('ug', zero),
-        ('vg', zero),
-        ('wfls', zero),
-        ('dqtdxls', zero),
-        ('dqtdyls', zero),
-        ('dqtdtls', zero),
-        ('dthldt', zero)])
-
-# --- Modified path ---
 dlt.write_profiles(
-        os.path.join(out_dir, 'lscale.inp.{0:03d}'.format(expnr)), 
+        os.path.join(out_dir, 'lscale.inp.{0:03d}'.format(expnr)),
         output, grid.kmax, docstring)
 
-#
-# Write radiation background profiles to `backrad.inp.expnr`.
-#
-
-output_backrad = odict([
-        ('time', les_input.time_sec.values),
-        ('z_lay', les_input.z_lay[0,::-1].values),
-        ('ts', les_input.ts[0].values),
-        ('p_lay', era5_backrad_input.p_lay[::-1].values),
-        ('t_lay', era5_backrad_input.t_lay[::-1].values),
-        ('qv_lay', era5_backrad_input.qv_lay[::-1].values),
-        ('o3_lay', era5_backrad_input.qv_lay[::-1].values),
-        # ('o3_lay', les_input_with_o3.o3_lay[::-1].values),
-        ('ql_lay', era5_backrad_input.ql_lay[::-1].values),])
-
-# --- Modified path ---
-dlt.write_backrad(
-        os.path.join(out_dir, 'backrad.inp.{0:03d}'.format(expnr)), 
-        output_backrad)
+import os
+os._exit(0)

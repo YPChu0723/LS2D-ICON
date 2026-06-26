@@ -34,7 +34,8 @@ dependencies = [
     "pyyaml",
     "dask",
     "setuptools",
-    "colorlog"
+    "colorlog",
+    "noise>=1.2.2",
 ]
 requires-python = "==3.10.18"
 

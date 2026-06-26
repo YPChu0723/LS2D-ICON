@@ -23,6 +23,7 @@ import matplotlib.pyplot as pl
 import netCDF4 as nc4
 import numpy as np
 import datetime
+import os
 
 # ---------------------------
 # "Private" help functions
@@ -165,7 +166,7 @@ def write_forcings(file_name, timedep_sfc, timedep_atm, docstring=''):
 
     # Write surface variables
     f.write('{0:^15s} {1:^15s} {2:^15s} {3:^15s} {4:^15s} {5:^15s}\n'\
-        .format('time', 'wthl_s', 'wqt_s', 'T_s', 'qt_s', 'p_s'))
+        .format('time', 'wthl_s', 'wqt_s', 'thls', 'qt_s', 'p_s'))
     f.write('{0:^15s} {1:^15s} {2:^15s} {3:^15s} {4:^15s} {5:^15s}\n'\
         .format('(s)', '(K m s-1)', '(kg kg-1 m s-1)', '(K)', '(kg kg-1)', '(Pa)'))
 
@@ -178,13 +179,13 @@ def write_forcings(file_name, timedep_sfc, timedep_atm, docstring=''):
         time  = _get_or_default(timedep_sfc, 'time',  nt, 0)
         wthls = _get_or_default(timedep_sfc, 'wthl_s',nt, 0)
         wqts  = _get_or_default(timedep_sfc, 'wqt_s', nt, 0)
-        Ts    = _get_or_default(timedep_sfc, 'T_s',   nt, 0)
+        thls    = _get_or_default(timedep_sfc, 'thls',   nt, 0)
         qts   = _get_or_default(timedep_sfc, 'qt_s',  nt, 0)
         ps    = _get_or_default(timedep_sfc, 'p_s',   nt, 0)
 
         for t in range(nt):
             f.write('{0:+1.8E} {1:+1.8E} {2:+1.8E} {3:+1.8E} {4:+1.8E} {5:+1.8E}\n'\
-                .format(time[t], wthls[t], wqts[t], Ts[t], qts[t], ps[t]))
+                .format(time[t], wthls[t], wqts[t], thls[t], qts[t], ps[t]))
 
     if timedep_atm is not None:
         time = timedep_atm['time']
@@ -244,27 +245,63 @@ def write_backrad(file_name, backrad):
     # shape check
     # Write data
     for k in range(nlay):
-        f.write('{0:>10.5f}  {1:>10.3f}  {2:>12.5E}  {3:>12.5E}  {4:>4E}\n'.format(p[k], T[k], qv[k], o3[k], ql[k])) 
+        f.write('{0:>10.5f}  {1:>10.3f}  {2:>12.5E}  {3:>12.5E}  {4:>4E}\n'.format(float(p[k]), float(T[k]), float(qv[k]), float(o3[k]), float(ql[k]))) 
 
     f.close()
 
 
-def create_backrad(p, T, q, expnr=1):
+def create_backrad(p, T, q, o3=None, lwc=None, expnr=1, output_dir='.', fmt='text'):
     """
-    Create the background profiles for RRTMG
+    Create the background profiles for DALES radiation schemes.
+
+    fmt='text' : text file for modradfull / d4stream (backrad.inp.001)
+                 First line: Tsurf ns
+                 Then ns lines: p(Pa)  T(K)  q(kg/kg)  o3(ppmv)  lwc
+    fmt='nc'   : NetCDF file for modradrrtmg (backrad.inp.001.nc)
     """
 
-    print(' - Saving backrad.inp.{0:03d}.nc'.format(expnr))
+    if fmt == 'text':
+        fname = os.path.join(output_dir, 'backrad.inp.{0:03d}'.format(expnr))
+        print(' - Saving {}'.format(fname))
 
-    nc_file = nc4.Dataset('backrad.inp.{0:03d}.nc'.format(expnr), 'w')
-    dims = nc_file.createDimension('lev', p.size)
+        ns = p.size
+        Tsurf = float(T[0])  # index 0 = lowest level (surface), array is bottom-to-top
 
-    p_var = nc_file.createVariable('lev', 'f4', ('lev'))
-    T_var = nc_file.createVariable('T',   'f4', ('lev'))
-    q_var = nc_file.createVariable('q',   'f4', ('lev'))
+        # d4stream_setup expects pressure increasing with index (TOA first, surface last).
+        # LS2D stores arrays bottom-to-top, so reverse before writing.
+        p_out   = p[::-1]
+        T_out   = T[::-1]
+        q_out   = q[::-1]
+        o3_data  = (o3[::-1]  if o3  is not None else np.zeros(ns))
+        lwc_data = (lwc[::-1] if lwc is not None else np.zeros(ns))
 
-    p_var[:] = p
-    T_var[:] = T
-    q_var[:] = q
+        with open(fname, 'w') as f:
+            f.write('{:.4f}  {:d}\n'.format(Tsurf, ns))
+            for k in range(ns):
+                f.write('{:.4f}  {:.4f}  {:.6E}  {:.6E}  {:.6E}\n'.format(
+                    float(p_out[k]), float(T_out[k]), float(q_out[k]),
+                    float(o3_data[k]), float(lwc_data[k])))
 
-    nc_file.close()
+    elif fmt == 'nc':
+        fname = os.path.join(output_dir, 'backrad.inp.{0:03d}.nc'.format(expnr))
+        print(' - Saving {}'.format(fname))
+
+        nc_file = nc4.Dataset(fname, 'w')
+        nc_file.createDimension('lev', p.size)
+
+        p_var = nc_file.createVariable('lev', 'f4', ('lev'))
+        T_var = nc_file.createVariable('T', 'f4', ('lev'))
+        q_var = nc_file.createVariable('q', 'f4', ('lev'))
+
+        p_var[:] = p
+        T_var[:] = T
+        q_var[:] = q
+
+        if o3 is not None:
+            o3_var = nc_file.createVariable('o3', 'f4', ('lev'))
+            o3_var[:] = o3
+
+        nc_file.close()
+
+    else:
+        raise ValueError('Unknown fmt="{}"; use "text" or "nc".'.format(fmt))

@@ -37,13 +37,13 @@ class _Grid:
 
     def plot(self, logx=False, logy=False):
 
-        fig, ax = pl.subplots()
+        fig, ax = pl.subplots(figsize=(5,8))
         ax.set_title("zsize={:.1f} m".format(self.zsize))
         ax.plot(np.arange(self.kmax), self.z/1000, color='k', linestyle='-', label=r'$z$')
         ax.set_xlabel(r'Vertical grid point (-)')
         ax.set_ylabel(r'height $z$ (km)')
         ax.tick_params(axis='x', labelcolor='k')
-        ax.set_ylim(0,12)
+        ax.set_ylim(0,2)
         ax.set_xlim(0,self.kmax)
         ax.grid()
 
@@ -51,7 +51,7 @@ class _Grid:
         ax2.set_ylabel(r'Grid spacing $\Delta z$ (m)', color='green')
         ax2.plot(np.arange(self.kmax), self.dz, color='green', linestyle='--', label=r'$\Delta z$')
         ax2.tick_params(axis='x', labelcolor='green')
-        ax2.set_ylim(0,200)
+        ax2.set_ylim(0,30)
 
         if logx:
             for ax in fig.axes:
@@ -164,13 +164,12 @@ class Grid_three_stage(_Grid):
 
         # 2. Stretch until we hit dz_max OR run out of grid points
         stretch_index = k_t 
-        print(k_t)
+
         
         while stretch_index < kmax and ((dz0 * (1 + stretch_factor)**(stretch_index -(k_t + 1))) < dz_max):
             self.dz[stretch_index] = dz0 * (1 + stretch_factor)**(stretch_index - (k_t + 1))
             stretch_index += 1
 
-        print(stretch_index, kmax)
         if stretch_index < kmax:
             self.dz[stretch_index:] = dz_max
 
@@ -187,45 +186,67 @@ class Grid_three_stage(_Grid):
         self.zh[-1] = self.zsize
 
 
+class Grid_stretched_capped(_Grid):
+    """
+    Three-stage vertical grid following the formula in Appendix A of the paper:
+
+        Δz[k] = dz_start                          if k <= k_T
+                 dz_start * (1+s)^(k-(k_T+1))     if k_T < k < k_M
+                 dz_end                            if k >= k_M
+
+        z[0] = dz_start / 2
+        z[k] = z[k-1] + dz[k]                     for k >= 1
+
+    Parameters
+    ----------
+    kmax : int
+        Total number of vertical levels.
+    dz_start : float
+        Uniform fine grid spacing for k <= k_T (m).
+    k_T : int
+        Last level index with uniform fine spacing (0-based).
+    s : float
+        Stretching factor (dimensionless, e.g. 0.0125).
+    k_M : int
+        First level index with uniform coarse spacing (0-based).
+    dz_end : float
+        Uniform coarse grid spacing for k >= k_M (m).
+
+    Example (paper parameters — kmax=297 gives zsize ≈ 11840 m):
+        Grid_stretched_capped(kmax=297, dz_start=10, k_T=120, s=0.0125, k_M=260, dz_end=185)
+    """
+
+    def __init__(self, kmax, dz_start, k_T, s, k_M, dz_end):
+        _Grid.__init__(self, kmax, dz_start)
+
+        for k in range(kmax):
+            if k <= k_T:
+                self.dz[k] = dz_start
+            elif k < k_M:
+                self.dz[k] = dz_start * (1 + s) ** (k - (k_T + 1))
+            else:
+                self.dz[k] = dz_end
+
+        self.z[0] = dz_start / 2
+        for k in range(1, kmax):
+            self.z[k] = self.z[k - 1] + self.dz[k]
+
+        self.zsize = self.z[kmax - 1] + 0.5 * self.dz[kmax - 1]
+
+        self.zh[1:-1] = 0.5 * (self.z[1:] + self.z[:-1])
+        self.zh[0] = 0
+        self.zh[-1] = self.zsize
+
 if __name__ == '__main__':
     """
     For debug/testing.
     """
 
-    grid1 = Grid_equidist(kmax=10, dz0=20)
-
-    grid2 = Grid_linear_stretched(kmax=286, dz0=10, alpha=0.0213)
-
-    heights = [0,50,10000]
-    alpha = [1.02, 1.2]
-    grid3 = Grid_stretched_manual(kmax=10, dz0=10, heights=heights, factors=alpha)
-
-    grid4 = Grid_stretched(kmax=10, dz0=10, nloc1=5, nbuf1=5, dz1=25)
-
-    grid5 = Grid_three_stage(kmax=176, dz0=10, z_stretch_start=500, stretch_factor=0.020, dz_max=80)
-    # Plot!
-    pl.figure()
-    grid2.plot()
-    pl.savefig('/Users/yunpeichu/LS2D-ICON/grid_linear_stretched.png')
+    grid4 = Grid_three_stage(kmax=156, dz0=10, z_stretch_start=800, stretch_factor=0.015, dz_max=20)
+    grid5 = Grid_stretched_capped(kmax=156, dz_start=10, k_T=100, s=0.02, k_M=140, dz_end=25)
+    # grid5 = Grid_stretched_capped(kmax=296, dz_start=5, k_T=210, s=0.02, k_M=280, dz_end=20)
+    grid4.plot()
+    pl.savefig('/Users/yunpeichu/visualization/ls2d_plots/grid_three_stage.png')
     grid5.plot()
-    pl.savefig('/Users/yunpeichu/LS2D-ICON/grid_three_stage.png')
-    # def plot_grid(grid, color, x, label):
-    #     pl.plot(np.ones_like(grid.z)*x, grid.z, '-o', color=color, ms=5, label=f'{label}')
-    #     pl.plot(np.ones_like(grid.zh)*x, grid.zh, '-x', color=color, ms=5)
-
-    # pl.subplot(121)
-    # plot_grid(grid1, 'tab:red', 0, 'Grid_equidist')
-    # plot_grid(grid2, 'tab:blue', 1, 'Grid_linear_stretched')
-    # plot_grid(grid3, 'tab:green', 2, 'Grid_stretched_manual')
-    # plot_grid(grid4, 'tab:purple', 3, 'Grid_stretched')
-    # pl.xlabel(r'-')
-    # pl.ylabel(r'$z$ (m)')
-    # pl.legend()
-
-    # pl.subplot(122)
-    # pl.plot(grid1.dz, grid1.z, '-o', color='tab:red')
-    # pl.plot(grid2.dz, grid2.z, '-o', color='tab:blue')
-    # pl.plot(grid3.dz, grid3.z, '-o', color='tab:green')
-    # pl.plot(grid4.dz, grid4.z, '-o', color='tab:purple')
-    # pl.xlabel(r'$\Delta$ z (m)')
-    # pl.ylabel(r'$z$ (m)')
+    print(grid5.dz)
+    pl.savefig('/Users/yunpeichu/visualization/ls2d_plots/grid_stretched_capped.png')
